@@ -10,6 +10,7 @@
 
 #include <fcntl.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -85,13 +86,15 @@ static bool read_all(int fd, void *buf, size_t n) {
 
 // ---------------------------------------------------------------- companion (root)
 
-static void companion_handler(int fd) {
+static bool handle_one(int fd) {
     uint8_t op = 0;
     uint32_t len = 0;
     int32_t uid = 0, pid = 0;
     int32_t result = -1;
+    bool keep = false;
 
-    if (!read_all(fd, &op, sizeof(op)) || !read_all(fd, &len, sizeof(len)) || len == 0 || len > 256) goto done;
+    if (!read_all(fd, &op, sizeof(op))) return false;  // peer closed
+    if (!read_all(fd, &len, sizeof(len)) || len == 0 || len > 256) return false;
     {
         std::string pkg(len, '\0');
         if (!read_all(fd, &pkg[0], len)) goto done;
@@ -100,7 +103,7 @@ static void companion_handler(int fd) {
             result = 0;
             for (auto &r : load_rules())
                 if (r.pkg == pkg) { result = 1; break; }
-            if (result) file_log("query " + pkg + " -> wanted");
+            if (result) { file_log("query " + pkg + " -> wanted"); keep = true; }
             goto done;
         }
         // op == 2: mount
@@ -154,6 +157,14 @@ static void companion_handler(int fd) {
     }
 done:
     write_all(fd, &result, sizeof(result));
+    return keep;
+}
+
+static void companion_handler(int fd) {
+    signal(SIGPIPE, SIG_IGN);
+    // The app keeps this connection open from preAppSpecialize to postAppSpecialize:
+    // request 1 (query) first, then request 2 (mount) once its mount namespace is ready.
+    while (handle_one(fd)) {}
 }
 
 // ---------------------------------------------------------------- app side
@@ -177,16 +188,21 @@ public:
         uid = args->uid;
 
         // The zygote cannot read /data/adb (SELinux), so the root companion decides.
+        // connectCompanion() only works here (pre), so keep the socket open until post.
         wanted = false;
-        int fd = api->connectCompanion();
-        if (fd >= 0) {
+        cfd = api->connectCompanion();
+        if (cfd >= 0) {
             uint8_t op = 1;
             uint32_t len = pkg.size();
             int32_t res = 0;
-            if (len && write_all(fd, &op, 1) && write_all(fd, &len, sizeof(len)) &&
-                write_all(fd, pkg.data(), len) && read_all(fd, &res, sizeof(res)))
+            if (len && write_all(cfd, &op, 1) && write_all(cfd, &len, sizeof(len)) &&
+                write_all(cfd, pkg.data(), len) && read_all(cfd, &res, sizeof(res)))
                 wanted = (res == 1);
-            close(fd);
+            if (wanted && !api->exemptFd(cfd)) {
+                LOGE("%s: exemptFd failed, cannot keep companion socket", pkg.c_str());
+                wanted = false;
+            }
+            if (!wanted) { close(cfd); cfd = -1; }
         } else {
             LOGE("connectCompanion failed for %s", pkg.c_str());
         }
@@ -194,22 +210,20 @@ public:
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
-        if (!wanted) return;
-        int fd = api->connectCompanion();
-        if (fd < 0) { LOGE("no companion"); return; }
-
+        if (!wanted || cfd < 0) return;
         uint8_t op = 2;
         uint32_t len = pkg.size();
         int32_t pid = getpid();
         int32_t result = -1;
-        if (write_all(fd, &op, 1) && write_all(fd, &len, sizeof(len)) && write_all(fd, pkg.data(), len) &&
-            write_all(fd, &uid, sizeof(uid)) && write_all(fd, &pid, sizeof(pid)) &&
-            read_all(fd, &result, sizeof(result))) {
+        if (write_all(cfd, &op, 1) && write_all(cfd, &len, sizeof(len)) &&
+            write_all(cfd, pkg.data(), len) && write_all(cfd, &uid, sizeof(uid)) &&
+            write_all(cfd, &pid, sizeof(pid)) && read_all(cfd, &result, sizeof(result))) {
             LOGI("%s: mount result %d", pkg.c_str(), result);
         } else {
             LOGE("%s: companion io failed", pkg.c_str());
         }
-        close(fd);
+        close(cfd);
+        cfd = -1;
     }
 
 private:
@@ -218,6 +232,7 @@ private:
     std::string pkg;
     int32_t uid = 0;
     bool wanted = false;
+    int cfd = -1;
 };
 
 REGISTER_ZYGISK_MODULE(VaultModule)
