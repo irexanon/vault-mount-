@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.18)
+project(vaultmount CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_library(vaultmount SHARED module.cpp)
+target_link_libraries(vaultmount log)

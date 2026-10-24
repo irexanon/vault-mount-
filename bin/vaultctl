@@ -1,0 +1,63 @@
+#!/system/bin/sh
+# vaultctl - manage the encrypted vault and per-app allow rules.
+# Run as root:  su -c "vaultctl <cmd>"
+#
+# rules.conf format (one per line):
+#   <package>|<target folder in app's storage>|<vault subfolder>
+# e.g. com.snapchat.android|Download/SnapVault|snapchat
+# The app sees /storage/emulated/<user>/<target> as the decrypted vault subfolder.
+
+V=/data/adb/vault
+GCFS=$V/bin/gocryptfs
+RULES=$V/rules.conf
+CTX="u:object_r:vault_file:s0"
+
+die() { echo "error: $*" >&2; exit 1; }
+[ "$(id -u)" = "0" ] || die "run as root"
+
+is_mounted() { grep -q " $V/plain " /proc/mounts; }
+
+case "$1" in
+  init)
+    [ -x "$GCFS" ] || die "missing $GCFS"
+    [ -z "$(ls -A $V/cipher)" ] || die "vault already initialised"
+    "$GCFS" -init "$V/cipher"
+    ;;
+  unlock)
+    # password: read from stdin (piped by the WebUI) or prompt on a tty
+    [ -x "$GCFS" ] || die "missing $GCFS"
+    is_mounted && die "already unlocked"
+    # Mount in the global (init) namespace so app namespaces can bind from it.
+    nsenter -t 1 -m -- "$GCFS" -allow_other -ko "context=$CTX" "$V/cipher" "$V/plain" || die "unlock failed"
+    echo "unlocked"
+    ;;
+  lock)
+    nsenter -t 1 -m -- umount -l "$V/plain" 2>/dev/null
+    echo "locked (apps already running keep their mounts until restarted)"
+    ;;
+  status)
+    is_mounted && echo "unlocked" || echo "locked"
+    ;;
+  allow)
+    pkg="$2"; target="$3"; sub="$4"
+    [ -n "$pkg" ] && [ -n "$target" ] && [ -n "$sub" ] || die "usage: allow <pkg> <target> <subfolder>"
+    grep -v "^$pkg|" "$RULES" > "$RULES.tmp"; mv "$RULES.tmp" "$RULES"
+    echo "$pkg|$target|$sub" >> "$RULES"
+    # The mount target must exist in real shared storage.
+    mkdir -p "/data/media/0/$target"
+    chown media_rw:media_rw "/data/media/0/$target" 2>/dev/null
+    is_mounted && mkdir -p "$V/plain/$sub"
+    echo "allowed $pkg -> $target (restart the app)"
+    ;;
+  deny)
+    [ -n "$2" ] || die "usage: deny <pkg>"
+    grep -v "^$2|" "$RULES" > "$RULES.tmp"; mv "$RULES.tmp" "$RULES"
+    echo "removed $2 (restart the app)"
+    ;;
+  list)
+    cat "$RULES"
+    ;;
+  *)
+    echo "usage: vaultctl init|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
+    ;;
+esac

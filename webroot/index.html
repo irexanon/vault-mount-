@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VaultMount</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1b1f; --mut:#6b6f76; --card:#f3f4f7; --acc:#3b6df0; --bad:#d23b3b; --ok:#1f9d55; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111214; --fg:#ececf0; --mut:#9a9ea6; --card:#1c1e22; --acc:#7d9bff; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,sans-serif; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  h2 { font-size:14px; color:var(--mut); margin:20px 0 8px; text-transform:uppercase; letter-spacing:.04em; }
+  .card { background:var(--card); border-radius:12px; padding:12px; margin-bottom:10px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  input { width:100%; padding:10px; border-radius:8px; border:1px solid var(--mut); background:var(--bg); color:var(--fg); font-size:15px; }
+  button { padding:10px 14px; border:0; border-radius:8px; background:var(--acc); color:#fff; font-size:15px; flex:none; }
+  button.sec { background:transparent; color:var(--acc); border:1px solid var(--acc); }
+  button.bad { background:var(--bad); }
+  .badge { padding:3px 10px; border-radius:99px; font-size:13px; color:#fff; flex:none; }
+  .locked { background:var(--bad); } .unlocked { background:var(--ok); }
+  .pkg { font-weight:600; word-break:break-all; } .sub { color:var(--mut); font-size:13px; word-break:break-all; }
+  pre { white-space:pre-wrap; word-break:break-all; font-size:12px; margin:0; max-height:240px; overflow:auto; }
+  #toast { position:fixed; left:16px; right:16px; bottom:16px; background:#222; color:#fff; padding:10px 14px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<h1>VaultMount</h1>
+
+<div class="card">
+  <div class="row" style="margin-bottom:10px">
+    <span>Vault</span><span id="state" class="badge locked" style="flex:none;margin-left:auto">…</span>
+  </div>
+  <div class="row">
+    <input id="pw" type="password" placeholder="Vault password" autocomplete="off">
+    <button id="unlock">Unlock</button>
+    <button id="lock" class="sec">Lock</button>
+  </div>
+  <div class="sub" style="margin-top:8px">First time? Run <code>su -c "vaultctl init"</code> once in a terminal.</div>
+</div>
+
+<h2>Allowed apps</h2>
+<div id="rules"></div>
+
+<h2>Allow an app</h2>
+<div class="card">
+  <input id="pkg" list="pkgs" placeholder="Package (pick or type)" autocapitalize="off">
+  <datalist id="pkgs"></datalist>
+  <input id="target" placeholder="Folder the app sees, e.g. Download/SnapVault" style="margin-top:8px" autocapitalize="off">
+  <input id="sub" placeholder="Vault subfolder, e.g. snapchat" style="margin-top:8px" autocapitalize="off">
+  <button id="add" style="margin-top:10px;width:100%">Allow</button>
+</div>
+
+<h2>Log</h2>
+<div class="card"><pre id="log">(none)</pre></div>
+<button id="refreshLog" class="sec" style="width:100%">Refresh log</button>
+
+<div id="toast"></div>
+
+<script>
+const CTL = '/data/adb/modules/vaultmount/bin/vaultctl';
+let cbId = 0;
+
+// KernelSU injects window.ksu.exec(cmd, optionsJson, callbackName)
+function sh(cmd) {
+  return new Promise((resolve) => {
+    if (typeof ksu === 'undefined' || !ksu.exec) {
+      resolve({ code: -1, out: '', err: 'Open this page from KernelSU Manager (WebUI).' });
+      return;
+    }
+    const name = 'cb_' + Date.now() + '_' + (cbId++);
+    window[name] = (code, out, err) => { delete window[name]; resolve({ code, out: out || '', err: err || '' }); };
+    ksu.exec(cmd, '{}', name);
+  });
+}
+const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+const $ = (id) => document.getElementById(id);
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3000); }
+const esc = (s) => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function refresh() {
+  const st = (await sh(CTL + ' status')).out.trim();
+  const b = $('state');
+  b.textContent = st || 'unknown';
+  b.className = 'badge ' + (st === 'unlocked' ? 'unlocked' : 'locked');
+
+  const rules = (await sh(CTL + ' list')).out.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+  $('rules').innerHTML = rules.length ? '' : '<div class="card sub">No apps allowed yet.</div>';
+  for (const r of rules) {
+    const [pkg, target, sub] = r.split('|');
+    const d = document.createElement('div');
+    d.className = 'card row';
+    d.innerHTML = '<div><div class="pkg">' + esc(pkg) + '</div><div class="sub">' + esc(target) + ' → vault/' + esc(sub) + '</div></div>';
+    const x = document.createElement('button');
+    x.className = 'bad'; x.textContent = 'Remove';
+    x.onclick = async () => { await sh(CTL + ' deny ' + q(pkg)); toast('Removed. Restart the app.'); refresh(); };
+    d.appendChild(x);
+    $('rules').appendChild(d);
+  }
+}
+
+async function loadPackages() {
+  const r = await sh('pm list packages -3');
+  $('pkgs').innerHTML = r.out.split('\n').map(l => l.replace('package:', '').trim()).filter(Boolean).sort()
+    .map(p => '<option value="' + esc(p) + '">').join('');
+}
+
+async function loadLog() {
+  const r = await sh('logcat -d -s VaultMount | tail -n 40');
+  $('log').textContent = r.out.trim() || '(none)';
+}
+
+$('unlock').onclick = async () => {
+  const pw = $('pw').value;
+  if (!pw) return toast('Enter the password');
+  const r = await sh('printf %s\\\\n ' + q(pw) + ' | ' + CTL + ' unlock');
+  $('pw').value = '';
+  toast(r.code === 0 ? 'Unlocked' : 'Unlock failed: ' + (r.err || r.out).trim().slice(0, 80));
+  refresh();
+};
+$('lock').onclick = async () => { await sh(CTL + ' lock'); toast('Locked'); refresh(); };
+$('add').onclick = async () => {
+  const pkg = $('pkg').value.trim(), target = $('target').value.trim().replace(/^\/+|\/+$/g, ''), sub = $('sub').value.trim();
+  if (!pkg || !target || !sub) return toast('Fill all three fields');
+  if (target.includes('..') || sub.includes('..') || sub.includes('/') || sub.includes('|') || target.includes('|') || pkg.includes('|'))
+    return toast('Invalid characters in a field');
+  const r = await sh(CTL + ' allow ' + q(pkg) + ' ' + q(target) + ' ' + q(sub));
+  toast(r.code === 0 ? 'Allowed. Restart the app.' : 'Failed: ' + (r.err || r.out).trim().slice(0, 80));
+  refresh();
+};
+$('refreshLog').onclick = loadLog;
+
+refresh(); loadPackages(); loadLog();
+</script>
+</body>
+</html>

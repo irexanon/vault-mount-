@@ -1,0 +1,10 @@
+# Label used for the decrypted vault mount. Apps may read/write it.
+type vault_file file_type
+typeattribute vault_file mlstrustedobject
+allow appdomain vault_file dir { search getattr open read write add_name remove_name create rmdir rename setattr reparent lock ioctl }
+allow appdomain vault_file file { getattr open read write append create unlink rename setattr lock ioctl map }
+allow appdomain vault_file lnk_file { getattr read create unlink }
+
+# Let the root companion/shell mount and enter app namespaces.
+allow su vault_file filesystem { mount unmount }
+allow fuse vault_file filesystem { mount unmount }
