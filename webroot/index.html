@@ -71,6 +71,7 @@
 <h2>Log</h2>
 <div class="card"><pre id="log">(none)</pre></div>
 <button id="refreshLog" class="sec" style="width:100%">Refresh log</button>
+<button id="diag" style="width:100%;margin-top:8px">Run diagnostics</button>
 
 <div id="toast"></div>
 
@@ -180,6 +181,11 @@ $('add').onclick = async () => {
   refresh();
 };
 $('refreshLog').onclick = loadLog;
+$('diag').onclick = async () => {
+  $('log').textContent = 'Running...';
+  const r = await sh(CTL + ' diag 2>&1');
+  $('log').textContent = (r.out + r.err).trim() || '(no output)';
+};
 
 refresh(); loadPackages(); loadLog();
 </script>

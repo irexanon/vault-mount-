@@ -99,10 +99,39 @@ case "$1" in
     grep -v "^$2|" "$RULES" > "$RULES.tmp"; mv "$RULES.tmp" "$RULES"
     echo "removed $2 (restart the app)"
     ;;
+  diag)
+    echo "== module"
+    grep -E '^version=' /data/adb/modules/vaultmount/module.prop
+    ls -l /data/adb/modules/vaultmount/zygisk/ 2>&1 | sed 's/^/  /'
+    echo "== zygisk modules installed"
+    ls /data/adb/modules 2>/dev/null | grep -i zygisk | sed 's/^/  /'
+    echo "== vault"
+    is_mounted && echo "  unlocked" || echo "  LOCKED"
+    echo "  auto-unlock: $([ -f $V/.key ] && echo on || echo off)"
+    echo "== rules"
+    sed 's/^/  /' "$RULES"
+    echo "== module log (last 15)"
+    logcat -d -s VaultMount 2>/dev/null | tail -n 15 | sed 's/^/  /'
+    while IFS='|' read -r pkg target sub; do
+      [ -n "$pkg" ] || continue
+      echo "== $pkg"
+      pid=$(pidof "$pkg" | awk '{print $1}')
+      if [ -z "$pid" ]; then echo "  NOT RUNNING (open it, then re-run)"; continue; fi
+      echo "  pid $pid"
+      echo "  mounts in app view:"
+      nsenter -t "$pid" -m -- sh -c "grep -E '$sub|vault|/$target' /proc/self/mounts" 2>&1 | sed 's/^/    /'
+      echo "  listing /storage/emulated/0/$target in app view:"
+      nsenter -t "$pid" -m -- ls -la "/storage/emulated/0/$target" 2>&1 | head -n 8 | sed 's/^/    /'
+      echo "  vault side:"
+      ls -la "$V/plain/$sub" 2>&1 | head -n 8 | sed 's/^/    /'
+    done < "$RULES"
+    echo "== recent avc denials"
+    logcat -d 2>/dev/null | grep -i "avc: *denied" | grep -i "fuse\|vault\|snapchat" | tail -n 6 | sed 's/^/  /'
+    ;;
   list)
     cat "$RULES"
     ;;
   *)
-    echo "usage: vaultctl initialized|init|init-auto|autounlock|remember|forget|autostate|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
+    echo "usage: vaultctl diag|initialized|init|init-auto|autounlock|remember|forget|autostate|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
     ;;
 esac
