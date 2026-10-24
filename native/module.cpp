@@ -153,6 +153,9 @@ public:
         if (name) {
             pkg = name;
             env->ReleaseStringUTFChars(args->nice_name, name);
+            // Secondary processes are named "<pkg>:<suffix>"; treat them as the same app.
+            size_t colon = pkg.find(':');
+            if (colon != std::string::npos) pkg.resize(colon);
         }
         uid = args->uid;
 
