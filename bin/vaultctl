@@ -24,12 +24,29 @@ case "$1" in
     "$GCFS" -init "$V/cipher"
     ;;
   unlock)
-    # password: read from stdin (piped by the WebUI) or prompt on a tty
     [ -x "$GCFS" ] || die "missing $GCFS"
     is_mounted && die "already unlocked"
+    LOG=$V/unlock.log
+    : > "$LOG"
+    IFS= read -r PW
     # Mount in the global (init) namespace so app namespaces can bind from it.
-    nsenter -t 1 -m -- "$GCFS" -allow_other -ko "context=$CTX" "$V/cipher" "$V/plain" || die "unlock failed"
-    echo "unlocked"
+    try_mount() {
+      printf '%s\n' "$PW" | nsenter -t 1 -m -- "$GCFS" -debug -allow_other $1 "$V/cipher" "$V/plain" >> "$LOG" 2>&1
+    }
+    echo "== try 1: with SELinux label" >> "$LOG"
+    try_mount "-ko context=$CTX"
+    if ! is_mounted; then
+      echo "== try 2: without label" >> "$LOG"
+      try_mount ""
+      if is_mounted; then
+        echo "unlocked WITHOUT SELinux label (apps may be denied; see unlock.log)"
+        PW=""; exit 0
+      fi
+    fi
+    PW=""
+    if is_mounted; then echo "unlocked"; exit 0; fi
+    logcat -d 2>/dev/null | grep -i "avc: *denied" | grep -i "fuse\|vault" | tail -n 4 >> "$LOG"
+    die "unlock failed: $(grep -v '^==' "$LOG" | tail -n 4 | tr '\n' ' ')"
     ;;
   lock)
     nsenter -t 1 -m -- umount -l "$V/plain" 2>/dev/null

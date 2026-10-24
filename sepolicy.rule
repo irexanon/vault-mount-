@@ -5,6 +5,9 @@ allow appdomain vault_file dir { search getattr open read write add_name remove_
 allow appdomain vault_file file { getattr open read write append create unlink rename setattr lock ioctl map }
 allow appdomain vault_file lnk_file { getattr read create unlink }
 
-# Let the root companion/shell mount and enter app namespaces.
-allow su vault_file filesystem { mount unmount }
-allow fuse vault_file filesystem { mount unmount }
+# Mounting a FUSE filesystem labelled vault_file (mount -o context=...).
+allow vault_file fuse filesystem associate
+allow vault_file labeledfs filesystem associate
+allow su vault_file filesystem { mount unmount remount relabelto relabelfrom associate getattr }
+allow su fuse filesystem { mount unmount remount getattr }
+allow su fuse_device chr_file { open read write ioctl getattr }

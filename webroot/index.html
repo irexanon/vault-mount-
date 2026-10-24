@@ -117,7 +117,7 @@ async function loadPackages() {
 }
 
 async function loadLog() {
-  const r = await sh('logcat -d -s VaultMount | tail -n 40');
+  const r = await sh('(logcat -d -s VaultMount | tail -n 25; echo; echo "--- unlock.log ---"; tail -n 25 /data/adb/vault/unlock.log) 2>&1');
   $('log').textContent = r.out.trim() || '(none)';
 }
 
@@ -126,8 +126,8 @@ $('unlock').onclick = async () => {
   if (!pw) return toast('Enter the password');
   const r = await sh('printf %s\\\\n ' + q(pw) + ' | ' + CTL + ' unlock');
   $('pw').value = '';
-  toast(r.code === 0 ? 'Unlocked' : 'Unlock failed: ' + (r.err || r.out).trim().slice(0, 80));
-  refresh();
+  toast(r.code === 0 ? (r.out.trim() || 'Unlocked').slice(0, 100) : 'Unlock failed - see Log');
+  refresh(); loadLog();
 };
 $('create').onclick = async () => {
   const a = $('npw').value, b = $('npw2').value;
