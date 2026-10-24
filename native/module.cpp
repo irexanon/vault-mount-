@@ -86,7 +86,7 @@ static bool read_all(int fd, void *buf, size_t n) {
 
 // ---------------------------------------------------------------- companion (root)
 
-static bool handle_one(int fd) {
+static bool handle_one(int fd, std::string &pending) {
     uint8_t op = 0;
     uint32_t len = 0;
     int32_t uid = 0, pid = 0;
@@ -99,15 +99,22 @@ static bool handle_one(int fd) {
         std::string pkg(len, '\0');
         if (!read_all(fd, &pkg[0], len)) goto done;
 
+        if (op == 3) {  // app-side trace message
+            file_log("app: " + pkg);
+            result = 0; keep = true;
+            goto done;
+        }
         if (op == 1) {  // query: does this package have a rule?
             result = 0;
             for (auto &r : load_rules())
                 if (r.pkg == pkg) { result = 1; break; }
-            if (result) { file_log("query " + pkg + " -> wanted"); keep = true; }
+            if (result) { file_log("query " + pkg + " -> wanted"); keep = true; pending = pkg; }
             goto done;
         }
         // op == 2: mount
-        if (!read_all(fd, &uid, sizeof(uid)) || !read_all(fd, &pid, sizeof(pid))) goto done;
+        pending.clear();
+        if (!read_all(fd, &uid, sizeof(uid)) || !read_all(fd, &pid, sizeof(pid))) { file_log("mount " + pkg + ": bad request"); goto done; }
+        file_log("mount request " + pkg + " pid " + std::to_string(pid) + " uid " + std::to_string(uid));
 
         // Is the vault unlocked? (fuse mount present)
         bool unlocked = false;
@@ -135,7 +142,7 @@ static bool handle_one(int fd) {
         char nspath[64];
         snprintf(nspath, sizeof(nspath), "/proc/%d/ns/mnt", pid);
         int nsfd = open(nspath, O_RDONLY | O_CLOEXEC);
-        if (nsfd < 0) { result = 3; goto done; }
+        if (nsfd < 0) { file_log("mount " + pkg + ": cannot open " + nspath); result = 3; goto done; }
 
         pid_t child = fork();
         if (child == 0) {
@@ -149,7 +156,7 @@ static bool handle_one(int fd) {
             _exit(rc);
         }
         close(nsfd);
-        if (child < 0) { result = 4; goto done; }
+        if (child < 0) { file_log("mount " + pkg + ": fork failed"); result = 4; goto done; }
         int st = 0;
         waitpid(child, &st, 0);
         result = (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 100 + WEXITSTATUS(st);
@@ -164,10 +171,22 @@ static void companion_handler(int fd) {
     signal(SIGPIPE, SIG_IGN);
     // The app keeps this connection open from preAppSpecialize to postAppSpecialize:
     // request 1 (query) first, then request 2 (mount) once its mount namespace is ready.
-    while (handle_one(fd)) {}
+    std::string pending;
+    while (handle_one(fd, pending)) {}
+    if (!pending.empty()) file_log("closed before mount request: " + pending);
 }
 
 // ---------------------------------------------------------------- app side
+
+static void trace(int fd, const std::string &msg) {
+    uint8_t op = 3;
+    uint32_t len = msg.size();
+    int32_t r = 0;
+    if (fd >= 0 && len) {
+        write_all(fd, &op, 1); write_all(fd, &len, sizeof(len));
+        write_all(fd, msg.data(), len); read_all(fd, &r, sizeof(r));
+    }
+}
 
 class VaultModule : public zygisk::ModuleBase {
 public:
@@ -198,9 +217,13 @@ public:
             if (len && write_all(cfd, &op, 1) && write_all(cfd, &len, sizeof(len)) &&
                 write_all(cfd, pkg.data(), len) && read_all(cfd, &res, sizeof(res)))
                 wanted = (res == 1);
-            if (wanted && !api->exemptFd(cfd)) {
-                LOGE("%s: exemptFd failed, cannot keep companion socket", pkg.c_str());
-                wanted = false;
+            if (wanted) {
+                bool ok = api->exemptFd(cfd);
+                trace(cfd, pkg + " pre: exemptFd=" + (ok ? "true" : "false"));
+                if (!ok) {
+                    LOGE("%s: exemptFd failed, cannot keep companion socket", pkg.c_str());
+                    wanted = false;
+                }
             }
             if (!wanted) { close(cfd); cfd = -1; }
         } else {
@@ -211,6 +234,7 @@ public:
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
         if (!wanted || cfd < 0) return;
+        trace(cfd, pkg + " post: reached");
         uint8_t op = 2;
         uint32_t len = pkg.size();
         int32_t pid = getpid();
