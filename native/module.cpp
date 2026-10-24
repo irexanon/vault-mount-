@@ -54,6 +54,13 @@ static std::vector<Rule> load_rules() {
     return out;
 }
 
+static void file_log(const std::string &msg) {
+    FILE *f = fopen("/data/adb/vault/module.log", "a");
+    if (!f) return;
+    fprintf(f, "%s\n", msg.c_str());
+    fclose(f);
+}
+
 static bool write_all(int fd, const void *buf, size_t n) {
     const char *p = static_cast<const char *>(buf);
     while (n) {
@@ -79,16 +86,25 @@ static bool read_all(int fd, void *buf, size_t n) {
 // ---------------------------------------------------------------- companion (root)
 
 static void companion_handler(int fd) {
+    uint8_t op = 0;
     uint32_t len = 0;
     int32_t uid = 0, pid = 0;
     int32_t result = -1;
 
-    if (!read_all(fd, &len, sizeof(len)) || len == 0 || len > 256) goto done;
+    if (!read_all(fd, &op, sizeof(op)) || !read_all(fd, &len, sizeof(len)) || len == 0 || len > 256) goto done;
     {
         std::string pkg(len, '\0');
-        if (!read_all(fd, &pkg[0], len) || !read_all(fd, &uid, sizeof(uid)) ||
-            !read_all(fd, &pid, sizeof(pid)))
+        if (!read_all(fd, &pkg[0], len)) goto done;
+
+        if (op == 1) {  // query: does this package have a rule?
+            result = 0;
+            for (auto &r : load_rules())
+                if (r.pkg == pkg) { result = 1; break; }
+            if (result) file_log("query " + pkg + " -> wanted");
             goto done;
+        }
+        // op == 2: mount
+        if (!read_all(fd, &uid, sizeof(uid)) || !read_all(fd, &pid, sizeof(pid))) goto done;
 
         // Is the vault unlocked? (fuse mount present)
         bool unlocked = false;
@@ -99,7 +115,7 @@ static void companion_handler(int fd) {
             while (std::getline(m, l))
                 if (l.find(needle) != std::string::npos) { unlocked = true; break; }
         }
-        if (!unlocked) { result = 1; goto done; }  // locked: app just gets no vault
+        if (!unlocked) { file_log("mount " + pkg + ": vault locked"); result = 1; goto done; }  // locked: app just gets no vault
 
         // Prepare all strings BEFORE fork (no allocation in the child).
         std::vector<std::pair<std::string, std::string>> mounts;  // src, dst
@@ -111,7 +127,7 @@ static void companion_handler(int fd) {
             mkdir(src.c_str(), 0777);
             mounts.emplace_back(src, dst);
         }
-        if (mounts.empty()) { result = 2; goto done; }
+        if (mounts.empty()) { file_log("mount " + pkg + ": no rules"); result = 2; goto done; }
 
         char nspath[64];
         snprintf(nspath, sizeof(nspath), "/proc/%d/ns/mnt", pid);
@@ -134,6 +150,7 @@ static void companion_handler(int fd) {
         int st = 0;
         waitpid(child, &st, 0);
         result = (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 100 + WEXITSTATUS(st);
+        file_log("mount " + pkg + " pid " + std::to_string(pid) + " -> result " + std::to_string(result));
     }
 done:
     write_all(fd, &result, sizeof(result));
@@ -159,10 +176,20 @@ public:
         }
         uid = args->uid;
 
-        // Only apps with a rule get any further involvement; everyone else unloads.
+        // The zygote cannot read /data/adb (SELinux), so the root companion decides.
         wanted = false;
-        for (auto &r : load_rules())
-            if (r.pkg == pkg) { wanted = true; break; }
+        int fd = api->connectCompanion();
+        if (fd >= 0) {
+            uint8_t op = 1;
+            uint32_t len = pkg.size();
+            int32_t res = 0;
+            if (len && write_all(fd, &op, 1) && write_all(fd, &len, sizeof(len)) &&
+                write_all(fd, pkg.data(), len) && read_all(fd, &res, sizeof(res)))
+                wanted = (res == 1);
+            close(fd);
+        } else {
+            LOGE("connectCompanion failed for %s", pkg.c_str());
+        }
         if (!wanted) api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
     }
 
@@ -171,10 +198,11 @@ public:
         int fd = api->connectCompanion();
         if (fd < 0) { LOGE("no companion"); return; }
 
+        uint8_t op = 2;
         uint32_t len = pkg.size();
         int32_t pid = getpid();
         int32_t result = -1;
-        if (write_all(fd, &len, sizeof(len)) && write_all(fd, pkg.data(), len) &&
+        if (write_all(fd, &op, 1) && write_all(fd, &len, sizeof(len)) && write_all(fd, pkg.data(), len) &&
             write_all(fd, &uid, sizeof(uid)) && write_all(fd, &pid, sizeof(pid)) &&
             read_all(fd, &result, sizeof(result))) {
             LOGI("%s: mount result %d", pkg.c_str(), result);

@@ -110,8 +110,10 @@ case "$1" in
     echo "  auto-unlock: $([ -f $V/.key ] && echo on || echo off)"
     echo "== rules"
     sed 's/^/  /' "$RULES"
-    echo "== module log (last 15)"
-    logcat -d -s VaultMount 2>/dev/null | tail -n 15 | sed 's/^/  /'
+    echo "== module log (companion file)"
+    tail -n 12 "$V/module.log" 2>/dev/null | sed 's/^/  /'
+    echo "== module log (logcat)"
+    logcat -d -s VaultMount 2>/dev/null | tail -n 10 | sed 's/^/  /'
     while IFS='|' read -r pkg target sub; do
       [ -n "$pkg" ] || continue
       echo "== $pkg"
