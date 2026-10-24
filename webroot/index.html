@@ -30,9 +30,12 @@
 
 <div class="card" id="setup" style="display:none">
   <div style="margin-bottom:8px"><b>Create your vault</b></div>
+  <button id="createAuto" style="width:100%">Create (automatic, no password)</button>
+  <div class="sub" style="margin:8px 0">Recommended. Allowed apps just work; other apps see nothing.</div>
+  <div class="sub" style="margin:12px 0 6px">Or protect it with your own password:</div>
   <input id="npw" type="password" placeholder="New password" autocomplete="off">
   <input id="npw2" type="password" placeholder="Repeat password" autocomplete="off" style="margin-top:8px">
-  <button id="create" style="margin-top:10px;width:100%">Create vault</button>
+  <button id="create" class="sec" style="margin-top:10px;width:100%">Create with password</button>
   <pre id="mk" style="margin-top:10px"></pre>
 </div>
 
@@ -40,10 +43,16 @@
   <div class="row" style="margin-bottom:10px">
     <span>Vault</span><span id="state" class="badge locked" style="flex:none;margin-left:auto">…</span>
   </div>
-  <div class="row">
+  <div class="row" id="pwRow">
     <input id="pw" type="password" placeholder="Vault password" autocomplete="off">
     <button id="unlock">Unlock</button>
     <button id="lock" class="sec">Lock</button>
+  </div>
+  <label class="sub" id="rememberRow" style="display:block;margin-top:8px"><input type="checkbox" id="remember" style="width:auto"> Keep unlocked automatically (no password after reboot)</label>
+  <div class="row" id="autoRow" style="display:none">
+    <span class="sub">Auto-unlock is on. No password needed.</span>
+    <button id="autoToggle" class="sec">Lock</button>
+    <button id="autoOff" class="sec">Turn off</button>
   </div>
 </div>
 
@@ -95,6 +104,12 @@ async function refresh() {
   b.textContent = st || 'unknown';
   b.className = 'badge ' + (st === 'unlocked' ? 'unlocked' : 'locked');
 
+  const auto = (await sh(CTL + ' autostate')).out.trim() === 'on';
+  $('pwRow').style.display = auto ? 'none' : 'flex';
+  $('rememberRow').style.display = auto ? 'none' : 'block';
+  $('autoRow').style.display = auto ? 'flex' : 'none';
+  $('autoToggle').textContent = st === 'unlocked' ? 'Lock' : 'Unlock';
+
   const rules = (await sh(CTL + ' list')).out.split('\n').filter(l => l.trim() && !l.startsWith('#'));
   $('rules').innerHTML = rules.length ? '' : '<div class="card sub">No apps allowed yet.</div>';
   for (const r of rules) {
@@ -126,6 +141,7 @@ $('unlock').onclick = async () => {
   if (!pw) return toast('Enter the password');
   const r = await sh('printf %s\\\\n ' + q(pw) + ' | ' + CTL + ' unlock');
   $('pw').value = '';
+  if (r.code === 0 && $('remember').checked) await sh('printf %s\\\\n ' + q(pw) + ' | ' + CTL + ' remember');
   toast(r.code === 0 ? (r.out.trim() || 'Unlocked').slice(0, 100) : 'Unlock failed - see Log');
   refresh(); loadLog();
 };
@@ -141,6 +157,18 @@ $('create').onclick = async () => {
     toast('Vault created');
   } else toast('Failed: ' + (r.err || r.out).trim().slice(0, 100));
 };
+$('createAuto').onclick = async () => {
+  const r = await sh(CTL + ' init-auto');
+  if (r.code !== 0) return toast('Failed: ' + (r.err || r.out).trim().slice(0, 100));
+  await sh(CTL + ' autounlock');
+  toast('Vault created and unlocked'); refresh(); loadLog();
+};
+$('autoToggle').onclick = async () => {
+  const st = (await sh(CTL + ' status')).out.trim();
+  await sh(CTL + (st === 'unlocked' ? ' lock' : ' autounlock'));
+  refresh(); loadLog();
+};
+$('autoOff').onclick = async () => { await sh(CTL + ' forget'); toast('Auto-unlock off. Password needed after reboot.'); refresh(); };
 $('lock').onclick = async () => { await sh(CTL + ' lock'); toast('Locked'); refresh(); };
 $('add').onclick = async () => {
   const pkg = $('pkg').value.trim(), target = $('target').value.trim().replace(/^\/+|\/+$/g, ''), sub = $('sub').value.trim();

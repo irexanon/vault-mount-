@@ -52,6 +52,31 @@ case "$1" in
     nsenter -t 1 -m -- umount -l "$V/plain" 2>/dev/null
     echo "locked (apps already running keep their mounts until restarted)"
     ;;
+  init-auto)
+    [ -x "$GCFS" ] || die "missing $GCFS"
+    [ -z "$(ls -A $V/cipher)" ] || die "vault already initialised"
+    ( umask 077; tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$V/.key"; echo >> "$V/.key" )
+    chmod 600 "$V/.key"
+    "$GCFS" -init "$V/cipher" < "$V/.key" > /dev/null 2>&1 || { rm -f "$V/.key"; die "init failed"; }
+    echo "created"
+    ;;
+  autounlock)
+    [ -f "$V/.key" ] || { echo "no auto key"; exit 0; }
+    is_mounted && { echo "already unlocked"; exit 0; }
+    "$0" unlock < "$V/.key"
+    ;;
+  remember)
+    IFS= read -r PW
+    ( umask 077; printf '%s\n' "$PW" > "$V/.key" )
+    chmod 600 "$V/.key"; PW=""
+    echo "auto-unlock on"
+    ;;
+  forget)
+    rm -f "$V/.key"; echo "auto-unlock off"
+    ;;
+  autostate)
+    [ -f "$V/.key" ] && echo on || echo off
+    ;;
   initialized)
     [ -f "$V/cipher/gocryptfs.conf" ] && echo yes || echo no
     ;;
@@ -78,6 +103,6 @@ case "$1" in
     cat "$RULES"
     ;;
   *)
-    echo "usage: vaultctl initialized|init|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
+    echo "usage: vaultctl initialized|init|init-auto|autounlock|remember|forget|autostate|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
     ;;
 esac
