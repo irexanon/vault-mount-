@@ -35,6 +35,9 @@ case "$1" in
     nsenter -t 1 -m -- umount -l "$V/plain" 2>/dev/null
     echo "locked (apps already running keep their mounts until restarted)"
     ;;
+  initialized)
+    [ -f "$V/cipher/gocryptfs.conf" ] && echo yes || echo no
+    ;;
   status)
     is_mounted && echo "unlocked" || echo "locked"
     ;;
@@ -58,6 +61,6 @@ case "$1" in
     cat "$RULES"
     ;;
   *)
-    echo "usage: vaultctl init|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
+    echo "usage: vaultctl initialized|init|unlock|lock|status|allow <pkg> <target> <sub>|deny <pkg>|list"
     ;;
 esac

@@ -15,5 +15,5 @@ for abi in arm64-v8a armeabi-v7a x86_64 x86; do
 done
 
 rm -f VaultMount.zip
-zip -r VaultMount.zip module.prop customize.sh service.sh sepolicy.rule bin zygisk webroot
+zip -r VaultMount.zip module.prop customize.sh service.sh action.sh sepolicy.rule bin zygisk webroot
 echo "built VaultMount.zip"

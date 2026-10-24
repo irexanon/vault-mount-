@@ -28,7 +28,15 @@
 <body>
 <h1>VaultMount</h1>
 
-<div class="card">
+<div class="card" id="setup" style="display:none">
+  <div style="margin-bottom:8px"><b>Create your vault</b></div>
+  <input id="npw" type="password" placeholder="New password" autocomplete="off">
+  <input id="npw2" type="password" placeholder="Repeat password" autocomplete="off" style="margin-top:8px">
+  <button id="create" style="margin-top:10px;width:100%">Create vault</button>
+  <pre id="mk" style="margin-top:10px"></pre>
+</div>
+
+<div class="card" id="main">
   <div class="row" style="margin-bottom:10px">
     <span>Vault</span><span id="state" class="badge locked" style="flex:none;margin-left:auto">…</span>
   </div>
@@ -37,7 +45,6 @@
     <button id="unlock">Unlock</button>
     <button id="lock" class="sec">Lock</button>
   </div>
-  <div class="sub" style="margin-top:8px">First time? Run <code>su -c "vaultctl init"</code> once in a terminal.</div>
 </div>
 
 <h2>Allowed apps</h2>
@@ -80,6 +87,9 @@ function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display
 const esc = (s) => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function refresh() {
+  const inited = (await sh(CTL + ' initialized')).out.trim() === 'yes';
+  $('setup').style.display = inited ? 'none' : 'block';
+  $('main').style.display = inited ? 'block' : 'none';
   const st = (await sh(CTL + ' status')).out.trim();
   const b = $('state');
   b.textContent = st || 'unknown';
@@ -118,6 +128,18 @@ $('unlock').onclick = async () => {
   $('pw').value = '';
   toast(r.code === 0 ? 'Unlocked' : 'Unlock failed: ' + (r.err || r.out).trim().slice(0, 80));
   refresh();
+};
+$('create').onclick = async () => {
+  const a = $('npw').value, b = $('npw2').value;
+  if (a.length < 8) return toast('Use at least 8 characters');
+  if (a !== b) return toast('Passwords differ');
+  const r = await sh('printf %s\\\\n ' + q(a) + ' | ' + CTL + ' init');
+  $('npw').value = ''; $('npw2').value = '';
+  if (r.code === 0) {
+    $('mk').textContent = 'SAVE THIS MASTER KEY (recovers the vault if you forget the password):\n\n' + r.out.trim();
+    $('setup').style.display = 'block';
+    toast('Vault created');
+  } else toast('Failed: ' + (r.err || r.out).trim().slice(0, 100));
 };
 $('lock').onclick = async () => { await sh(CTL + ' lock'); toast('Locked'); refresh(); };
 $('add').onclick = async () => {
