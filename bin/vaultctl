@@ -127,8 +127,10 @@ case "$1" in
       echo "  vault side:"
       ls -la "$V/plain/$sub" 2>&1 | head -n 8 | sed 's/^/    /'
     done < "$RULES"
-    echo "== recent avc denials"
-    logcat -d 2>/dev/null | grep -i "avc: *denied" | grep -i "fuse\|vault\|snapchat" | tail -n 6 | sed 's/^/  /'
+    echo "== avc denials: sockets / zygisk / snapchat (last 15)"
+    logcat -d 2>/dev/null | grep -i "avc: *denied" | grep -i "unix_stream_socket\|zygisk\|rezygisk\|zygiskd\|snapchat\|vault_file\|fuse" | tail -n 15 | sed 's/^/  /'
+    echo "== module log (companion file, full tail)"
+    tail -n 25 "$V/module.log" 2>/dev/null | sed 's/^/  /'
     ;;
   list)
     cat "$RULES"
