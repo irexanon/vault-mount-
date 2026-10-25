@@ -63,9 +63,8 @@
 <div class="card">
   <input id="pkg" list="pkgs" placeholder="Package (pick or type)" autocapitalize="off">
   <datalist id="pkgs"></datalist>
-  <input id="target" placeholder="Folder the app sees, e.g. Download/SnapVault" style="margin-top:8px" autocapitalize="off">
-  <input id="sub" placeholder="Vault subfolder, e.g. snapchat" style="margin-top:8px" autocapitalize="off">
   <button id="add" style="margin-top:10px;width:100%">Allow</button>
+  <div class="sub" style="margin-top:8px">The app gets its own private storage; its default folders (DCIM, Pictures, Download...) are created automatically.</div>
 </div>
 
 <h2>Log</h2>
@@ -117,7 +116,7 @@ async function refresh() {
     const [pkg, target, sub] = r.split('|');
     const d = document.createElement('div');
     d.className = 'card row';
-    d.innerHTML = '<div><div class="pkg">' + esc(pkg) + '</div><div class="sub">' + esc(target) + ' → vault/' + esc(sub) + '</div></div>';
+    d.innerHTML = '<div><div class="pkg">' + esc(pkg) + '</div><div class="sub">' + (target === '.' ? 'Whole storage' : esc(target)) + ' → vault/' + esc(sub) + '</div></div>';
     const x = document.createElement('button');
     x.className = 'bad'; x.textContent = 'Remove';
     x.onclick = async () => { await sh(CTL + ' deny ' + q(pkg)); toast('Removed. Restart the app.'); refresh(); };
@@ -172,12 +171,12 @@ $('autoToggle').onclick = async () => {
 $('autoOff').onclick = async () => { await sh(CTL + ' forget'); toast('Auto-unlock off. Password needed after reboot.'); refresh(); };
 $('lock').onclick = async () => { await sh(CTL + ' lock'); toast('Locked'); refresh(); };
 $('add').onclick = async () => {
-  const pkg = $('pkg').value.trim(), target = $('target').value.trim().replace(/^\/+|\/+$/g, ''), sub = $('sub').value.trim();
-  if (!pkg || !target || !sub) return toast('Fill all three fields');
-  if (target.includes('..') || sub.includes('..') || sub.includes('/') || sub.includes('|') || target.includes('|') || pkg.includes('|'))
-    return toast('Invalid characters in a field');
-  const r = await sh(CTL + ' allow ' + q(pkg) + ' ' + q(target) + ' ' + q(sub));
-  toast(r.code === 0 ? 'Allowed. Restart the app.' : 'Failed: ' + (r.err || r.out).trim().slice(0, 80));
+  const pkg = $('pkg').value.trim();
+  if (!pkg) return toast('Enter a package');
+  if (!/^[A-Za-z0-9_.]+$/.test(pkg)) return toast('Invalid package name');
+  const r = await sh(CTL + ' allow ' + q(pkg));
+  toast(r.code === 0 ? 'Allowed. Restart the app.' : 'Failed: ' + (r.err || r.out).trim().slice(0, 100));
+  $('pkg').value = '';
   refresh();
 };
 $('refreshLog').onclick = loadLog;

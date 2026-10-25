@@ -84,15 +84,24 @@ case "$1" in
     is_mounted && echo "unlocked" || echo "locked"
     ;;
   allow)
-    pkg="$2"; target="$3"; sub="$4"
-    [ -n "$pkg" ] && [ -n "$target" ] && [ -n "$sub" ] || die "usage: allow <pkg> <target> <subfolder>"
+    pkg="$2"
+    [ -n "$pkg" ] || die "usage: allow <pkg>"
+    # Whole-storage mode: the app's entire /sdcard view becomes its own vault folder.
+    target="."
+    sub="$pkg"
     grep -v "^$pkg|" "$RULES" > "$RULES.tmp"; mv "$RULES.tmp" "$RULES"
     echo "$pkg|$target|$sub" >> "$RULES"
-    # The mount target must exist in real shared storage.
-    mkdir -p "/data/media/0/$target"
-    chown media_rw:media_rw "/data/media/0/$target" 2>/dev/null
-    is_mounted && mkdir -p "$V/plain/$sub"
-    echo "allowed $pkg -> $target (restart the app)"
+    is_mounted || die "vault is locked; unlock first so folders can be prepared"
+    d="$V/plain/$sub"
+    mkdir -p "$d"
+    for f in DCIM Pictures Download Movies Music Documents Android; do mkdir -p "$d/$f"; done
+    # The app must own its vault folder, otherwise it cannot write to it.
+    uid=$(stat -c %u "/data/data/$pkg" 2>/dev/null)
+    if [ -n "$uid" ]; then
+      chown -R "$uid:$uid" "$d"
+    fi
+    chmod -R 770 "$d"
+    echo "allowed $pkg (whole storage -> vault/$sub); restart the app"
     ;;
   deny)
     [ -n "$2" ] || die "usage: deny <pkg>"
