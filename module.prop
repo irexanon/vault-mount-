@@ -1,6 +1,6 @@
 id=vaultmount
 name=VaultMount
-version=v0.1.5
-versionCode=6
+version=v0.1.6
+versionCode=7
 author=you
 description=Per-app encrypted storage vault. Allowed apps get the decrypted vault bind-mounted into their own storage view; everyone else sees nothing.

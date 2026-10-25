@@ -113,7 +113,7 @@ case "$1" in
     echo "== module log (companion file)"
     tail -n 12 "$V/module.log" 2>/dev/null | sed 's/^/  /'
     echo "== module log (logcat)"
-    logcat -d -s VaultMount 2>/dev/null | tail -n 10 | sed 's/^/  /'
+    logcat -d 2>/dev/null | grep -a "VaultMount" | tail -n 12 | sed 's/^/  /'
     while IFS='|' read -r pkg target sub; do
       [ -n "$pkg" ] || continue
       echo "== $pkg"

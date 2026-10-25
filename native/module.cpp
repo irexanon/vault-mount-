@@ -8,6 +8,7 @@
 //   fork() a single-threaded child -> setns(app mnt ns) -> bind mount vault subfolder over
 //   /storage/emulated/<user>/<target>.
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
@@ -233,7 +234,14 @@ public:
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
+        LOGE("post called: pkg=%s wanted=%d cfd=%d", pkg.c_str(), (int)wanted, cfd);
         if (!wanted || cfd < 0) return;
+        {
+            int fl = fcntl(cfd, F_GETFD);
+            int e = errno;
+            LOGE("post: cfd=%d F_GETFD=%d errno=%d", cfd, fl, fl < 0 ? e : 0);
+            if (fl < 0) return;  // fd already gone
+        }
         trace(cfd, pkg + " post: reached");
         uint8_t op = 2;
         uint32_t len = pkg.size();
